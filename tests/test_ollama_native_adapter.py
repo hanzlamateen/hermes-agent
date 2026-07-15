@@ -1,13 +1,12 @@
 """Tests for agent/ollama_native_adapter.py — the native Ollama /api/chat adapter.
 
-Covers request/response/stream/embeddings translation, the flag-gated Ollama
-detection probe, and the OpenAI-SDK-shaped client facade. Network is faked with
+Covers request/response/stream/embeddings translation, the probe-based Ollama
+detection, and the OpenAI-SDK-shaped client facade. Network is faked with
 httpx.MockTransport + unittest.mock (no extra test dependency).
 """
 
 import asyncio
 import json
-import os
 from unittest.mock import patch
 
 import httpx
@@ -221,36 +220,37 @@ def test_native_root_strips_v1():
     assert native_root("http://h:11434/") == "http://h:11434"
 
 
-def test_detection_is_noop_when_flag_unset():
+def test_detection_is_noop_for_empty_base_url():
     _OLLAMA_PROBE_CACHE.clear()
-    with patch.dict(os.environ, {"HERMES_OLLAMA_NATIVE": ""}, clear=False):
-        # No network touched when the flag is off.
-        assert is_native_ollama_base_url("http://h:11434/v1") is False
+    # An empty base_url short-circuits to False without touching the network.
+    with patch("agent.ollama_native_adapter.httpx.get") as get:
+        assert is_native_ollama_base_url("") is False
+        assert get.call_count == 0
 
 
 def test_detection_positive_for_ollama():
+    # Detection is probe-only (no feature flag): a positive /api/version identifies
+    # Ollama and routes it to native mode, mirroring the Gemini adapter's always-on
+    # selection.
     _OLLAMA_PROBE_CACHE.clear()
     resp = httpx.Response(200, json={"version": "0.30.0"})
-    with patch.dict(os.environ, {"HERMES_OLLAMA_NATIVE": "1"}, clear=False):
-        with patch("agent.ollama_native_adapter.httpx.get", return_value=resp):
-            assert is_native_ollama_base_url("http://h:11434/v1") is True
+    with patch("agent.ollama_native_adapter.httpx.get", return_value=resp):
+        assert is_native_ollama_base_url("http://h:11434/v1") is True
 
 
 def test_detection_negative_for_non_ollama():
     _OLLAMA_PROBE_CACHE.clear()
     resp = httpx.Response(404)
-    with patch.dict(os.environ, {"HERMES_OLLAMA_NATIVE": "1"}, clear=False):
-        with patch("agent.ollama_native_adapter.httpx.get", return_value=resp):
-            # A non-Ollama "custom" endpoint (vLLM/llama.cpp/LM Studio) is left on /v1.
-            assert is_native_ollama_base_url("http://other:8000/v1") is False
+    with patch("agent.ollama_native_adapter.httpx.get", return_value=resp):
+        # A non-Ollama "custom" endpoint (vLLM/llama.cpp/LM Studio) is left on /v1.
+        assert is_native_ollama_base_url("http://other:8000/v1") is False
 
 
 def test_detection_rejects_200_without_version_field():
     _OLLAMA_PROBE_CACHE.clear()
     resp = httpx.Response(200, json={"status": "ok"})
-    with patch.dict(os.environ, {"HERMES_OLLAMA_NATIVE": "1"}, clear=False):
-        with patch("agent.ollama_native_adapter.httpx.get", return_value=resp):
-            assert is_native_ollama_base_url("http://h:11434") is False
+    with patch("agent.ollama_native_adapter.httpx.get", return_value=resp):
+        assert is_native_ollama_base_url("http://h:11434") is False
 
 
 # ── client facade (httpx.MockTransport) ───────────────────────────────────────

@@ -12,9 +12,10 @@ OpenAI shape the agent already consumes — modeled directly on the sibling
 rest of the agent loop is unchanged.
 
 Selected in `agent_runtime_helpers.create_openai_client` for a `custom` provider
-whose `base_url` is positively identified as Ollama (gated on the
-`HERMES_OLLAMA_NATIVE` env var). Self-contained: only depends on httpx + stdlib,
-so it can be unit-tested without the rest of the agent.
+whose `base_url` is positively identified as Ollama via an `/api/version` probe —
+the same always-on, detection-based selection the sibling Gemini adapter uses (no
+feature flag). Self-contained: only depends on httpx + stdlib, so it can be
+unit-tested without the rest of the agent.
 """
 
 from __future__ import annotations
@@ -22,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import threading
 import time
 import uuid
@@ -33,25 +33,12 @@ import httpx
 
 logger = logging.getLogger("hermes_ollama_native")
 
-# Feature flag — native mode only engages when explicitly enabled. Off → callers
-# fall through to the stock OpenAI client (the default /v1 behavior).
-FLAG_ENV = "HERMES_OLLAMA_NATIVE"
-
 # Cache of base_url(root) -> (is_ollama, expires_at_monotonic_or_None). Positive
 # results never expire (an Ollama endpoint stays Ollama); negatives expire after a
 # short TTL so a transient blip (Ollama restart) recovers, while a persistent
 # misconfiguration (non-Ollama endpoint) isn't re-probed on every client build.
 _OLLAMA_PROBE_CACHE: Dict[str, Tuple[bool, Optional[float]]] = {}
 _NEG_PROBE_TTL = 60.0  # seconds
-
-
-def _flag_enabled() -> bool:
-    return str(os.environ.get(FLAG_ENV, "")).strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
 
 
 def native_root(base_url: str) -> str:
@@ -99,11 +86,12 @@ def _probe_is_ollama(root: str, *, timeout: float = 2.0) -> bool:
 def is_native_ollama_base_url(base_url: str) -> bool:
     """True when we should route this endpoint through native /api/chat.
 
-    Gated on (a) the HERMES_OLLAMA_NATIVE flag and (b) a positive Ollama
-    identification via /api/version. Works whether the URL carries /v1 or not.
+    Detection-only, no feature flag: a `custom` endpoint routes to native mode iff
+    it positively identifies as Ollama via /api/version — mirroring how the sibling
+    Gemini adapter selects on `is_native_gemini_base_url` alone. The probe is what
+    keeps other `custom` endpoints (vLLM / llama.cpp / LM Studio), which have no
+    /api/version, on the stock /v1 path. Works whether the URL carries /v1 or not.
     """
-    if not _flag_enabled():
-        return False
     if not (base_url or "").strip():
         return False
     return _probe_is_ollama(native_root(base_url))

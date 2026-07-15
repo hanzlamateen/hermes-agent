@@ -1473,10 +1473,10 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
         # back to /v1. Route it through Ollama's NATIVE /api/chat — which honors
         # per-request num_ctx and returns correct streaming tool_calls, unlike the
         # OpenAI-compat /v1 path — but ONLY when the endpoint is positively
-        # identified as Ollama, so a non-Ollama "custom" server (vLLM / llama.cpp /
-        # LM Studio) is never mis-routed. Gated on HERMES_OLLAMA_NATIVE: when unset,
-        # is_native_ollama_base_url() returns False immediately (no probe), so
-        # behavior is byte-identical to the existing /v1 path.
+        # identified as Ollama via an /api/version probe (same detection-based,
+        # always-on selection the Gemini branch above uses), so a non-Ollama
+        # "custom" server (vLLM / llama.cpp / LM Studio) — which has no /api/version
+        # — fails the probe and stays byte-identical to the existing /v1 path.
         from agent.ollama_native_adapter import OllamaNativeClient, is_native_ollama_base_url
 
         base_url = str(client_kwargs.get("base_url", "") or "")
